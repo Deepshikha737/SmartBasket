@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.ai.embeddings import encode_texts, product_to_text
 from app.ai.faiss_store import get_faiss_store
+from app.services.ecommerce.allowed_sources import is_allowed_source
 
 _log = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ _log = logging.getLogger(__name__)
 async def rebuild_faiss_from_db(db: AsyncIOMotorDatabase) -> tuple[int, int]:
     col = db["products"]
     cursor = col.find({})
-    docs: list[dict[str, Any]] = [d async for d in cursor]
+    docs: list[dict[str, Any]] = [d async for d in cursor if is_allowed_source(d.get("source"))]
     if not docs:
         _log.warning("No products in DB; skipping FAISS build.")
         return 0, 0

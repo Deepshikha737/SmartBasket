@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import DbDep
 from app.models.schemas import ProductOut, SyncResponse
+from app.services.catalog_cleanup import purge_disallowed_products
 from app.services.ecommerce import ALL_ADAPTERS
 from app.services.matching import assign_match_groups
 from app.services.product_repository import ProductRepository
@@ -40,6 +41,7 @@ async def sync_from_vendors(
 ):
     repo = ProductRepository(db)
     await repo.ensure_indexes()
+    await purge_disallowed_products(db)
     inserted = 0
     updated = 0
     sources: list[str] = []

@@ -5,7 +5,9 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.ai.embeddings import encode_texts, product_to_text
 from app.ai.faiss_store import get_faiss_store
 from app.models.schemas import ProductOut
+from app.services.ecommerce.allowed_sources import is_allowed_source
 from app.services.product_repository import ProductRepository
+
 
 async def load_user_prefs(db: AsyncIOMotorDatabase, user_id: Optional[str]) -> dict[str, Any]:
     if not user_id:
@@ -22,8 +24,8 @@ async def recommend_for_product(
 ) -> dict[str, Any]:
     repo = ProductRepository(db)
     anchor = await repo.get(product_id)
-    if not anchor:
-        return {"error": "product not found", "similar": [], "cheaper": [], "premium": []}
+    if not anchor or not is_allowed_source(anchor.source):
+        return {"error": "product not found", "similar": [], "cheaper": [], "premium": [], "similar_models": []}
 
     prefs = await load_user_prefs(db, user_id)
     max_price = prefs.get("max_price")
@@ -36,14 +38,14 @@ async def recommend_for_product(
     hits = store.search(q[0], top_k=top_k * 6)
     id_scores = {pid: s for pid, s in hits if pid != anchor.id}
     if not id_scores:
-        return {"anchor": anchor.model_dump(), "similar": [], "cheaper": [], "premium": []}
+        return {"anchor": anchor.model_dump(), "similar": [], "cheaper": [], "premium": [], "similar_models": []}
 
     products = await repo.list_by_ids_str(list(id_scores.keys()))
 
     items: list[tuple[ProductOut, float]] = []
     for pid, sc in id_scores.items():
         p = products.get(pid)
-        if not p:
+        if not p or not is_allowed_source(p.source):
             continue
         if cats and p.category not in cats:
             continue

@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.api.deps import DbDep
 from app.models.schemas import CompareRequest
+from app.services.ecommerce.allowed_sources import is_allowed_source
 from app.services.product_repository import ProductRepository
 
 router = APIRouter(prefix="/api/compare", tags=["compare"])
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/api/compare", tags=["compare"])
 @router.post("")
 async def compare_products(body: CompareRequest, db: DbDep):
     repo = ProductRepository(db)
-    products = await repo.get_many(body.product_ids)
+    products = [p for p in await repo.get_many(body.product_ids) if is_allowed_source(p.source)]
     if len(products) < 2:
         raise HTTPException(400, "Need at least two valid product IDs")
     prices = [p.price for p in products]

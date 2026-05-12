@@ -4,6 +4,7 @@ from app.ai.embeddings import encode_texts
 from app.ai.faiss_store import get_faiss_store
 from app.api.deps import DbDep
 from app.models.schemas import ProductOut, SemanticSearchRequest, UnifiedSearchResponse
+from app.services.ecommerce.allowed_sources import ALLOWED_PRODUCT_SOURCES, is_allowed_source
 from app.services.product_repository import ProductRepository
 from app.services.unified_search import run_unified_search
 
@@ -39,7 +40,12 @@ async def keyword_search(db: DbDep, q: str, limit: int = 20):
     except Exception:
         # Fallback if text index missing
         cursor = db["products"].find(
-            {"$or": [{"title": {"$regex": q, "$options": "i"}}, {"description": {"$regex": q, "$options": "i"}}]}
+            {
+                "$and": [
+                    {"$or": [{"title": {"$regex": q, "$options": "i"}}, {"description": {"$regex": q, "$options": "i"}}]},
+                    {"source": {"$in": list(ALLOWED_PRODUCT_SOURCES)}},
+                ]
+            }
         ).limit(limit)
         out = []
         async for d in cursor:
@@ -67,6 +73,6 @@ async def semantic_search(body: SemanticSearchRequest, db: DbDep):
     ranked = []
     for pid, score in hits:
         p = pmap.get(pid)
-        if p:
+        if p and is_allowed_source(p.source):
             ranked.append({"product": p.model_dump(), "score": round(float(score), 4)})
     return ranked

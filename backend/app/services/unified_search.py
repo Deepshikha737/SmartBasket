@@ -15,7 +15,9 @@ from app.models.schemas import (
     UnifiedSearchResponse,
 )
 from app.services.best_store import build_recommendation_sentence, pick_best, score_listing
+from app.services.catalog_cleanup import clear_all_product_listings, purge_disallowed_products
 from app.services.ecommerce import ALL_ADAPTERS
+from app.services.ecommerce.allowed_sources import ALLOWED_PRODUCT_SOURCES, is_allowed_source
 from app.services.embedding_pipeline import rebuild_faiss_from_db
 from app.services.matching import assign_match_groups
 from app.services.product_repository import ProductRepository
@@ -55,6 +57,10 @@ async def run_unified_search(
 ) -> UnifiedSearchResponse:
     repo = ProductRepository(db)
     await repo.ensure_indexes()
+    await clear_all_product_listings(db)
+    purged = await purge_disallowed_products(db)
+    if purged:
+        _log.info("Removed %s non-allowed listing(s) after catalog reset.", purged)
 
     sources: list[str] = []
     for adapter in ALL_ADAPTERS:
@@ -64,7 +70,10 @@ async def run_unified_search(
             await repo.upsert_product(p)
 
     n_match = await assign_match_groups(db)
-    sync_note = f"Queried Amazon, Flipkart, Croma, Meesho ({len(sources)} sources). Semantic matching updated {n_match} rows."
+    sync_note = (
+        f"Fresh search: catalog reset, then Amazon, Flipkart, Croma, Meesho ({len(sources)} sources). "
+        f"Semantic matching updated {n_match} rows."
+    )
 
     if rebuild_index:
         n_vec, _dim = await rebuild_faiss_from_db(db)
@@ -83,7 +92,14 @@ async def run_unified_search(
             cand.add(pid)
 
     rx = {"$regex": query.strip(), "$options": "i"}
-    async for d in db["products"].find({"$or": [{"title": rx}, {"description": rx}]}).limit(80):
+    async for d in db["products"].find(
+        {
+            "$and": [
+                {"$or": [{"title": rx}, {"description": rx}]},
+                {"source": {"$in": list(ALLOWED_PRODUCT_SOURCES)}},
+            ]
+        }
+    ).limit(80):
         cand.add(str(d["_id"]))
 
     if not cand:
@@ -102,18 +118,21 @@ async def run_unified_search(
 
     for pid in cand:
         p = await repo.get(pid)
-        if not p:
+        if not p or not is_allowed_source(p.source):
             continue
         gid = p.matched_group_id or f"solo:{p.id}"
         if gid in seen_group:
             continue
         seen_group.add(gid)
         if gid.startswith("solo:"):
-            group_to_products[gid] = [p]
+            if is_allowed_source(p.source):
+                group_to_products[gid] = [p]
         else:
             cursor = db["products"].find({"matched_group_id": gid})
             grp: list[ProductOut] = []
             async for doc in cursor:
+                if not is_allowed_source(doc.get("source")):
+                    continue
                 doc["_id"] = str(doc["_id"])
                 rev = doc.get("reviews") or []
                 doc["reviews_sample"] = rev[:5]
@@ -141,6 +160,9 @@ async def run_unified_search(
     anchor_for_alt: Optional[ProductOut] = None
 
     for gid, plist in sorted(group_to_products.items(), key=lambda x: -sem_scores.get(x[0], 0.0)):
+        plist = [x for x in plist if is_allowed_source(x.source)]
+        if not plist:
+            continue
         prices = [x.price for x in plist]
         rows_scored: list[tuple[ProductOut, ListingScoreBreakdown, ComparedListing]] = []
 

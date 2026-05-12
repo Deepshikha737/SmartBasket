@@ -253,6 +253,7 @@ export default function App() {
     if (!query) return;
     setBusy(true);
     setErr(null);
+    setRes(null);
     try {
       setRes(await unifiedSearch(query));
     } catch {

@@ -52,7 +52,9 @@ def group_award_rationale(
     label = _platform_label(store)
     if kind == "price":
         p = next(L for L in listings if L.product.get("source") == store)
-        return f"{label} lists the lowest price at ₹{p.product.get('price', 0):,.0f} for this match."
+        cur = str(p.product.get("currency") or "INR").upper()
+        sym = "₹" if cur == "INR" else f"{cur} "
+        return f"{label} lists the lowest price at {sym}{float(p.product.get('price', 0)):,.2f} for this match."
     if kind == "delivery":
         p = next(L for L in listings if L.product.get("source") == store)
         d = p.product.get("delivery_days", "?")

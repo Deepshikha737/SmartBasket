@@ -10,6 +10,7 @@ from app.api.routers import api_router
 from app.config import get_settings
 from app.db.mongo import close_db, get_db
 from app.services.alerts_service import check_alerts_once, ensure_alert_baselines
+from app.services.catalog_cleanup import purge_disallowed_products
 from app.services.product_repository import ProductRepository
 
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
     db = await get_db()
     repo = ProductRepository(db)
     await repo.ensure_indexes()
+    await purge_disallowed_products(db)
     await ensure_alert_baselines(db)
     loaded = get_faiss_store().load()
     _log.info("FAISS preload: %s", "ok" if loaded else "no index on disk")

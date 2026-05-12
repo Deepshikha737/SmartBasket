@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 
 from app.models.schemas import ProductCreate, ProductOut
+from app.services.ecommerce.allowed_sources import ALLOWED_PRODUCT_SOURCES, is_allowed_source
 
 
 def _serialize(doc: dict[str, Any]) -> ProductOut:
@@ -38,6 +39,8 @@ class ProductRepository:
         await self._history.create_index([("product_id", 1), ("ts", -1)])
 
     async def upsert_product(self, p: ProductCreate) -> str:
+        if not is_allowed_source(p.source):
+            raise ValueError(f"Unsupported retailer source: {p.source!r}. Allowed: {sorted(ALLOWED_PRODUCT_SOURCES)}")
         now = datetime.now(timezone.utc)
         doc = p.model_dump()
         doc["updated_at"] = now
@@ -59,7 +62,11 @@ class ProductRepository:
 
     async def get(self, product_id: str) -> Optional[ProductOut]:
         doc = await self._col.find_one({"_id": ObjectId(product_id)})
-        return _serialize(doc) if doc else None
+        if not doc:
+            return None
+        if not is_allowed_source(doc.get("source")):
+            return None
+        return _serialize(doc)
 
     async def get_many(self, ids: list[str]) -> list[ProductOut]:
         oids = []
@@ -68,18 +75,20 @@ class ProductRepository:
                 oids.append(ObjectId(i))
             except Exception:
                 continue
-        cursor = self._col.find({"_id": {"$in": oids}})
+        cursor = self._col.find({"_id": {"$in": oids}, "source": {"$in": list(ALLOWED_PRODUCT_SOURCES)}})
         return [_serialize(d) async for d in cursor]
 
     async def list_products(self, skip: int = 0, limit: int = 50, category: Optional[str] = None) -> list[ProductOut]:
-        q: dict[str, Any] = {}
+        q: dict[str, Any] = {"source": {"$in": list(ALLOWED_PRODUCT_SOURCES)}}
         if category:
             q["category"] = category
         cursor = self._col.find(q).sort("updated_at", -1).skip(skip).limit(limit)
         return [_serialize(d) async for d in cursor]
 
     async def text_search(self, q: str, limit: int = 20) -> list[ProductOut]:
-        cursor = self._col.find({"$text": {"$search": q}}).limit(limit)
+        cursor = self._col.find(
+            {"$text": {"$search": q}, "source": {"$in": list(ALLOWED_PRODUCT_SOURCES)}}
+        ).limit(limit)
         return [_serialize(d) async for d in cursor]
 
     async def all_for_embedding(self) -> list[dict[str, Any]]:
